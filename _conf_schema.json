@@ -88,7 +88,60 @@
         "description": "自然语言自动触发",
         "type": "bool",
         "default": false,
-        "hint": "开启后，群内发送包含「来份/张图」等自然语言时自动触发发图。无需命令前缀。"
+        "hint": "开启后，群内发送「来张图」「大肥鱼来三张初音图 竖图」这类自然语言时自动触发发图，无需命令前缀。"
+      },
+      "auto_trigger_aliases": {
+        "description": "机器人称呼别名",
+        "type": "string",
+        "default": "",
+        "hint": "逗号分隔。出现在句首时视为在叫机器人，会从搜索标签里剔除（如填「大肥鱼,肥鱼」，「大肥鱼来张图」= 随机 1 张，而「初音来张图」仍搜索初音）。留空时只认「签到角色名」。"
+      },
+      "auto_trigger_ai_fallback": {
+        "description": "自然语言模型兜底",
+        "type": "bool",
+        "default": true,
+        "hint": "规则解析认不出的句子才调用模型抽取标签与数量。命中规则的常见说法不会调用模型，不产生额外延迟与费用。"
+      },
+      "auto_trigger_ai_provider_id": {
+        "description": "兜底使用的模型",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用当前会话的模型。仅在「自然语言模型兜底」开启时生效。"
+      },
+      "auto_trigger_ai_timeout": {
+        "description": "兜底模型超时（秒）",
+        "type": "float",
+        "default": 6.0,
+        "hint": "超过此时长未返回就放弃本次自然语言发图，消息继续交给其他插件处理。"
+      },
+      "image_orientation": {
+        "description": "发图方向筛选",
+        "type": "string",
+        "default": "any",
+        "options": [
+          "any",
+          "landscape",
+          "portrait",
+          "square"
+        ],
+        "hint": "any=不限，landscape=横图，portrait=竖图，square=方图。作为默认值生效；用户在指令里写「横图」「竖图」「方图」可临时覆盖本次请求。"
+      },
+      "caption_mode": {
+        "description": "发图文案详细程度",
+        "type": "string",
+        "default": "full",
+        "options": [
+          "full",
+          "compact",
+          "off"
+        ],
+        "hint": "full=标题+画师+作品链接+图源与作品 ID，compact=单行紧凑显示，off=仅标题与作品 ID。图源会标注是 P站（Pixiv）还是 L站（Lolicon）。"
+      },
+      "favorites_enabled": {
+        "description": "启用发图收藏",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后可使用「/p 收藏」「/p 收藏列表」「/p 取消收藏」管理收藏作品，收藏可跨群与私聊查看。"
       }
     }
   },

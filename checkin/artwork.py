@@ -584,7 +584,7 @@ class CheckinArtworkMixin:
         try:
             from PIL import Image as PILImage
         except ImportError:
-            logger.warning(f"{LOG_PREFIX} 未安装 Pillow\uff0c跳过背景完整性校验")
+            logger.warning(f"{LOG_PREFIX} 未安装 Pillow，跳过背景完整性校验")
             return resolved
         try:
             with PILImage.open(resolved) as img:
@@ -690,7 +690,7 @@ class CheckinArtworkMixin:
                         self._event_scope(event), source_key, raw_count
                     )
                     logger.info(
-                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品\uff0c切换下一页"
+                        f"{LOG_PREFIX} 签到背景第 {page_attempt} 页无符合 3:4 的竖向作品，切换下一页"
                     )
                 except Exception as e:
                     logger.warning(
@@ -722,7 +722,7 @@ class CheckinArtworkMixin:
                     self._event_scope(event), source_key, raw_count
                 )
                 logger.info(
-                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用\uff0c切换下一页"
+                    f"{LOG_PREFIX} 签到背景第 {page_attempt} 页候选均已使用，切换下一页"
                 )
             except Exception as e:
                 logger.warning(
@@ -774,7 +774,7 @@ class CheckinArtworkMixin:
                 )
                 if not claimed:
                     logger.debug(
-                        f"{LOG_PREFIX} 签到背景跳过\uff1a作品 {illust_id} 已被其他签到占用"
+                        f"{LOG_PREFIX} 签到背景跳过：作品 {illust_id} 已被其他签到占用"
                     )
                     continue
             title = illust.get("title", "无标题")

@@ -251,7 +251,12 @@ class FiltersMixin:
                     feature="normal_pending",
                     user_id=user_id,
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"{LOG_PREFIX} 认领待发送作品失败，跳过剩余去重: "
+                    f"illust_id={illust_id} feature=normal_pending "
+                    f"error_type={type(e).__name__} error={e}"
+                )
                 return chosen
             if claimed:
                 chosen.append(illust)

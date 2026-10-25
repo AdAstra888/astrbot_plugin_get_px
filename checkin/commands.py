@@ -480,7 +480,11 @@ class CheckinCommandMixin:
             return ""
         try:
             status = bridge.snapshot(user_id, str(event.get_group_id() or ""))
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"{LOG_PREFIX} 读取万象画卷额度失败，状态卡将省略额度行: "
+                f"user_id={user_id} error_type={type(e).__name__} error={e}"
+            )
             return ""
         if not status.available:
             return ""

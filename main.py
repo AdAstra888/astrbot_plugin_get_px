@@ -3,7 +3,12 @@
 通过标签搜索插画并发送图片，支持 Lolicon 主源、Pixiv 回退、内容安全过滤、多页作品、自然语言自动触发和签到。
 
 搜索指令：
-    /p [标签] [数量]           搜索并发送图片
+    /p [标签] [数量] [方向]    搜索并发送图片
+    /p #作品ID                 按作品 ID 直接发图
+    /p 收藏 [#作品ID]          收藏最近发过的图或指定作品
+    /p 收藏列表 [数量]         查看自己的收藏
+    /p 取消收藏 [#作品ID]      取消收藏
+    /p 帮助                    查看发图指令帮助
 
 自动触发（需在配置中开启）：
     来一份图                   发送 1 张随机图片
@@ -33,7 +38,6 @@
 
 import asyncio
 from pathlib import Path
-import re
 import time
 import weakref
 from copy import deepcopy
@@ -57,8 +61,12 @@ from .pixiv import DeliveryMixin, FiltersMixin, SearchMixin
 from .pixiv.client import PixivClient
 from .pixiv.constants import MAX_IMAGE_COUNT
 from .pixiv.downloader import ImageDownloader
+from .pixiv.favorites import FavoriteStore
 from .pixiv.index import ImageIndexStore
 from .pixiv.lolicon import LoliconClient
+from .pixiv.natural import AUTO_TRIGGER_PATTERN
+from .pixiv.natural_flow import NaturalTriggerMixin
+from .pixiv.pcommands import PCommandMixin
 from .plugin_api import PluginWebApi
 
 # ──────────────────────────────────────────────────────────────────────
@@ -70,26 +78,10 @@ PLUGIN_NAME = "astrbot_plugin_get_px"
 PLUGIN_VERSION = "v3.8.0"
 WEB_INTERNAL_ERROR_MESSAGE = "服务内部错误，请稍后重试"
 
-AUTO_TRIGGER_PATTERN = r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"
 CHECKIN_REGEX_PATTERN = r"^(?!/)签到$"
 CHECKIN_HELP_IMAGE = (
     Path(__file__).resolve().parent / "assets" / "checkin_help_v4.1.png"
 )
-
-
-CHINESE_NUMBER_MAP = {
-    "一": "1",
-    "二": "2",
-    "两": "2",
-    "三": "3",
-    "四": "4",
-    "五": "5",
-    "六": "6",
-    "七": "7",
-    "八": "8",
-    "九": "9",
-    "十": "10",
-}
 
 # ──────────────────────────────────────────────────────────────────────
 # 插件主类
@@ -102,6 +94,8 @@ class GetPxPlugin(
     CheckinShopMixin,
     CheckinArtworkMixin,
     SearchMixin,
+    PCommandMixin,
+    NaturalTriggerMixin,
     DeliveryMixin,
     FiltersMixin,
     Star,
@@ -118,6 +112,10 @@ class GetPxPlugin(
         self._last_request: dict[str, float] = {}
         self.data_dir: Path | None = None
         self.image_index: ImageIndexStore | None = None
+        self.favorite_store: FavoriteStore | None = None
+        self._last_sent_illust: dict[str, dict] = {}
+        self._natural_resolver = None
+        self._ai_rejected_cache: dict[str, bool] = {}
         self.plugin_web_api = PluginWebApi(
             self,
             plugin_name=PLUGIN_NAME,
@@ -152,6 +150,15 @@ class GetPxPlugin(
             retention_days=dedupe_days,
         )
         await self.image_index.cleanup_old_days(trigger="startup")
+        try:
+            self.favorite_store = await asyncio.to_thread(FavoriteStore, data_dir)
+        except Exception as exc:
+            # 收藏是附加功能，建库失败不应该拖垮整个插件。
+            logger.warning(
+                f"{LOG_PREFIX} 收藏数据库初始化失败，收藏功能将不可用: "
+                f"error_type={type(exc).__name__}"
+            )
+            self.favorite_store = None
         checkin_database_existed = (self.data_dir / "checkin.sqlite3").exists()
         try:
             self.checkin_store = await asyncio.to_thread(CheckinStore, data_dir)
@@ -349,6 +356,18 @@ class GetPxPlugin(
                     f"error_type={type(exc).__name__}"
                 )
         self.image_index = None
+        if getattr(self, "favorite_store", None) is not None:
+            try:
+                self.favorite_store.close()
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} 关闭收藏数据库失败: "
+                    f"error_type={type(exc).__name__}"
+                )
+            self.favorite_store = None
+        last_sent = getattr(self, "_last_sent_illust", None)
+        if last_sent is not None:
+            last_sent.clear()
         self.checkin_store = None
         logger.info(f"{LOG_PREFIX} 插件已停止")
 
@@ -358,28 +377,12 @@ class GetPxPlugin(
 
     @filter.command("p")
     async def cmd_p(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
-        """搜索并发送图片。参数: [标签] [数量]"""
-        if not self._ensure_client_or_error(event):
-            yield event.plain_result(
-                "⚠️ 图片源暂不可用，请配置 Lolicon API，或填写 pixiv_refresh_token 作为回退"
-            )
-            return
+        """搜索并发送图片。参数: [标签] [数量] [方向] / #作品ID / 收藏"""
         event.stop_event()
         # 框架无参时传入空字符串；直接调用时则会保留默认哨兵。
         raw_query = "" if query is GreedyStr else str(query or "")
-        tag, count = self._split_tag_and_count(raw_query)
-        async for result in self._handle_search(event, tag=tag, count_str=count):
+        async for result in self._handle_p_query(event, raw_query):
             yield result
-
-    @staticmethod
-    def _split_tag_and_count(query: str) -> tuple[str, str]:
-        """把 GreedyStr 参数拆成标签与尾部数量；纯数字视为随机发图数量。"""
-        tokens = query.split()
-        if not tokens:
-            return "", ""
-        if tokens[-1].isdigit():
-            return " ".join(tokens[:-1]), tokens[-1]
-        return " ".join(tokens), ""
 
     # ──────────────────────────────────────────────────────────────
     # 签到指令
@@ -634,41 +637,7 @@ class GetPxPlugin(
     @filter.regex(AUTO_TRIGGER_PATTERN)
     async def auto_trigger(self, event: AstrMessageEvent):
         """自然语言自动触发发图。"""
-        if not self._cfg_bool("auto_trigger_enabled", False):
-            return
-        if not self._ensure_client_or_error(event):
-            return
-
-        message = event.get_message_str().strip()
-        match = re.match(AUTO_TRIGGER_PATTERN, message)
-        if not match:
-            return
-
-        event.stop_event()
-
-        count_part = match.group(2).strip() if match.group(2) else ""
-        tag_part = (match.group(4) or "").strip()
-
-        # 解析数量：中文数字、阿拉伯数字
-        count_str = ""
-        raw = count_part if count_part else "1"
-        if raw.isdigit():
-            count_str = raw
-        else:
-            for cn_digit, arabic in CHINESE_NUMBER_MAP.items():
-                if raw == cn_digit:
-                    count_str = arabic
-                    break
-            if not count_str:
-                count_str = "1"
-
-        logger.info(
-            f"{LOG_PREFIX} 自然语言触发: count={count_str} "
-            f"tag_configured={'yes' if tag_part else 'no'}"
-        )
-        async for result in self._handle_search(
-            event, tag=tag_part, count_str=count_str
-        ):
+        async for result in self._handle_auto_trigger(event):
             yield result
 
     # ──────────────────────────────────────────────────────────────
@@ -734,6 +703,13 @@ class GetPxPlugin(
         "auto_downgrade_original_mb": "pixiv_source",
         "forward_threshold": "pixiv_source",
         "auto_trigger_enabled": "pixiv_source",
+        "auto_trigger_aliases": "pixiv_source",
+        "auto_trigger_ai_fallback": "pixiv_source",
+        "auto_trigger_ai_provider_id": "pixiv_source",
+        "auto_trigger_ai_timeout": "pixiv_source",
+        "image_orientation": "pixiv_source",
+        "caption_mode": "pixiv_source",
+        "favorites_enabled": "pixiv_source",
         "filter_manga": "content_dedupe",
         "dedupe_days": "content_dedupe",
         "dedupe_ttl_hours": "content_dedupe",

@@ -90,6 +90,17 @@ def test_plugin_center_exposes_independent_group_safety_switches() -> None:
     assert 'id="policyAddTitle"' in html and 'id="policyAddLabel"' in html
     assert 'import * as policyState from "./policy-state.mjs"' in source
 
+def test_blacklist_thumbnails_are_requested_in_batches() -> None:
+    """缩略图以 base64 返回，必须分片请求，避免整表图片挤进一个响应。"""
+
+    source = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    assert "const BLACKLIST_THUMB_BATCH_SIZE = 32;" in source
+    body = _function_body(source, "loadBlacklistThumbnails")
+    assert "slice(index, index + BLACKLIST_THUMB_BATCH_SIZE)" in body
+    assert "Promise.allSettled" in body
+    assert "Object.assign(thumbs" in body
+
+
 def test_policy_add_error_is_bound_before_add_handlers_use_it() -> None:
     source = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
     mapping = source[source.index("const els = {"):source.index("};", source.index("const els = {"))]

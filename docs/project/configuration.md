@@ -16,6 +16,17 @@
 | `auto_downgrade_original_mb` | `float` | `3.0` | 原图超过此 MiB 时降级，范围 0–25；0 禁用降级 |
 | `forward_threshold` | `int` | `1` | 下载张数严格大于此值时合并转发（仅 aiocqhttp）；0 始终合并，范围 0–20 |
 | `auto_trigger_enabled` | `bool` | `false` | 群内自然语言（「来份/张图」）自动触发发图 |
+| `auto_trigger_aliases` | `string` | 空 | 额外的机器人称呼，逗号分隔；命中句首称呼时从标签里剔除。`checkin_bot_name` 自动作为称呼，无需重复填写 |
+| `auto_trigger_ai_fallback` | `bool` | `true` | 规则解析不出时调用当前会话模型兜底抽取标签/张数/方向；关闭后仅走规则 |
+| `auto_trigger_ai_provider_id` | `string` | 空 | 兜底解析指定的模型提供商 ID；留空用当前会话模型 |
+| `auto_trigger_ai_timeout` | `float` | `6.0` | 兜底解析超时秒数，范围 1–30；超时按「不是发图请求」处理 |
+| `image_orientation` | `enum` | `any` | 发图默认画面方向：`any` 不限 / `landscape` 横图 / `portrait` 竖图 / `square` 方图；指令里写方向可临时覆盖 |
+| `caption_mode` | `enum` | `full` | 发图文案：`full` 标题+画师+作品链接+图源与 ID / `compact` 单行精简 / `off` 仅标题与 ID |
+| `favorites_enabled` | `bool` | `true` | 启用 `/p 收藏`、`/p 收藏列表`、`/p 取消收藏`；关闭后相关指令提示未启用 |
+
+`image_orientation` 的方向会同时转成 Lolicon 的 `aspectRatio` 数值区间（横图 `gt1.05lt4.00`、竖图 `gt0.25lt0.95`、方图 `gt0.88lt1.12`）并下发给上游，本地再按宽高比复核一次；宽高比未知的作品按不匹配处理。横竖用的是「大于 1 是横、小于 1 是竖」的宽口径，9:16 手机壁纸和 2:3 插画都算竖图；方图仍用 ±12% 窄带。签到背景的 3:4 严格口径（`checkin/background.py` 的 `CHECKIN_ARTWORK_ASPECT_PARAM`）不受影响，两者共用 `pixiv/orientation.py` 的尺寸解析。
+
+`caption_mode` 的图源标注区分「P站（Pixiv）」与「L站（Lolicon）」，`compact` 用短标签「P站」「L站」。`favorites_enabled` 关闭只影响指令入口，不影响已存收藏数据。
 
 ## 2. 图片筛选与去重（`content_dedupe`）
 

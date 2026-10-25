@@ -325,6 +325,38 @@ async def test_remove_save_failure_rolls_back_config_and_runtime(group_policy_ha
 
 
 @pytest.mark.asyncio
+async def test_management_overview_counts_blacklist_without_listing_it() -> None:
+    """概览只需要黑名单条数，不应把整张表读进内存。"""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = build_plugin(tmp)
+        for illust_id in ("901", "902", "903"):
+            await plugin.image_index.add_blacklist_illust(illust_id=illust_id)
+        api = PluginWebApi(
+            plugin,
+            plugin_name="astrbot_plugin_get_px",
+            log_prefix="[GetPx]",
+            internal_error_message="internal",
+        )
+        app = Quart(__name__)
+        app.add_url_rule("/overview", view_func=api.overview, methods=["GET"])
+        try:
+            async def _fail_listing() -> list:
+                raise AssertionError("overview 不应调用 list_blacklist_illusts")
+
+            plugin.image_index.list_blacklist_illusts = _fail_listing
+
+            async with app.test_app():
+                response = await app.test_client().get("/overview")
+                payload = await response.get_json()
+
+            assert response.status_code == 200
+            assert payload["blacklist_count"] == 3
+        finally:
+            plugin.image_index.close()
+
+
+@pytest.mark.asyncio
 async def test_management_overview_omits_legacy_cleanup_stats() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = build_plugin(tmp)
@@ -344,6 +376,34 @@ async def test_management_overview_omits_legacy_cleanup_stats() -> None:
             assert response.status_code == 200
             assert payload["success"]
             assert "cache_cleanup" not in payload
+        finally:
+            plugin.image_index.close()
+
+
+@pytest.mark.asyncio
+async def test_thumb_data_batch_returns_all_ids_beyond_frontend_batch_size() -> None:
+    """单次请求不再有 32 条上限，前端分片后也不会丢图。"""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = build_plugin(tmp)
+        api = PluginWebApi(
+            plugin,
+            plugin_name="astrbot_plugin_get_px",
+            log_prefix="[GetPx]",
+            internal_error_message="internal",
+        )
+        app = Quart(__name__)
+        app.add_url_rule("/thumbs", view_func=api.image_blacklist_thumb_data_batch, methods=["POST"])
+        ids = [str(1000 + index) for index in range(40)]
+        try:
+            async with app.test_app():
+                response = await app.test_client().post("/thumbs", json={"ids": ids})
+                payload = await response.get_json()
+
+            assert response.status_code == 200
+            assert payload["success"]
+            assert payload["missing"] == ids
+            assert payload["thumbs"] == {}
         finally:
             plugin.image_index.close()
 

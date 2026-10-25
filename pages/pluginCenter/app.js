@@ -175,8 +175,14 @@ async function loadFont() {
     link.rel = "stylesheet";
     link.href = config.font_url;
     document.head.append(link);
-  } catch {  }
+  } catch (error) {
+    console.warn("Failed to load custom font:", error);
+  }
 }
+
+// 黑名单缩略图以 base64 data URL 返回，整表一次请求会把所有图片塞进同一个响应。
+// 按 32 条分片并发请求，单个分片失败只影响该批，其余缩略图仍能渲染。
+const BLACKLIST_THUMB_BATCH_SIZE = 32;
 
 // Batch load thumbnails for blacklist
 async function loadBlacklistThumbnails() {
@@ -189,13 +195,33 @@ async function loadBlacklistThumbnails() {
     return;
   }
 
-  try {
-    const res = await apiPost("image-blacklist/thumb-data-batch", { ids: idsWithThumb });
-    state.thumbs = res.thumbs || {};
-  } catch (error) {
-    console.warn("Failed to load blacklist thumbnails:", error);
-    state.thumbs = {};
+  const batches = [];
+  for (let index = 0; index < idsWithThumb.length; index += BLACKLIST_THUMB_BATCH_SIZE) {
+    batches.push(idsWithThumb.slice(index, index + BLACKLIST_THUMB_BATCH_SIZE));
   }
+
+  const settled = await Promise.allSettled(
+    batches.map(ids => apiPost("image-blacklist/thumb-data-batch", { ids }))
+  );
+
+  const thumbs = {};
+  const failed = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      Object.assign(thumbs, result.value.thumbs || {});
+      return;
+    }
+    failed.push(batches[index].length);
+  });
+
+  if (failed.length) {
+    console.warn(
+      `Failed to load ${failed.length} blacklist thumbnail batch(es)`,
+      failed.reduce((sum, size) => sum + size, 0)
+    );
+  }
+
+  state.thumbs = thumbs;
 }
 
 async function reloadAll() {

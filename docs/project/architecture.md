@@ -24,6 +24,14 @@ checkin/
 │  └─ holiday.py         联网节假日数据更新与查询
 pixiv/
 │  ├─ search.py          Lolicon 主源与 Pixiv 搜索/推荐回退流程
+│  ├─ query.py           /p 参数解析（标签、数量、方向、作品 ID、收藏动作）
+│  ├─ pcommands.py       /p 指令分发与收藏指令业务
+│  ├─ natural.py         自然语言发图解析（规则）与入口闸门正则
+│  ├─ natural_flow.py    自然语言触发流程：规则优先、模型兜底
+│  ├─ natural_ai.py      自然语言模型兜底解析
+│  ├─ caption.py         发图文案拼装与图源标注
+│  ├─ orientation.py     画面方向口径与宽高比计算（与签到背景共用）
+│  ├─ favorites.py       发图收藏存储
 │  ├─ delivery.py        消息发送错误处理
 │  ├─ filters.py         普通分级、漫画和安全策略过滤
 │  ├─ safety.py          内置安全词与文本规范化
@@ -55,9 +63,49 @@ plugin_api/
 
 四季系列（`spring`/`summer`/`autumn`/`winter`）共用同一套布局 class（`.season-card`、`.season-info`）和信息区块，只有调色板、季节文案和装饰 SVG 不同。正式主题目录只保留共享壳所需的 `style.css`、`artwork.svg` 和最终 `preview.png`。开发期的构建脚本、预览渲染工具和测试素材只在本地工作区使用，不参与插件运行时和正式提交；改动装饰参数或预览素材后，应在本地重新生成对应正式目录中的 `preview.png`。
 
+## 发图流程
+
+`/p` 的原始参数先交给 `pixiv/query.py` 的 `parse_p_query()` 解析成 `SearchQuery`（动作、标签、数量、方向、作品 ID），再由 `pixiv/pcommands.py` 的 `PCommandMixin._handle_p_query()` 分发：搜索走 `SearchMixin._handle_search()`，收藏动作走 `_handle_favorite_add/remove/list()`。解析与分发分离，指令层只保留装饰器和 `GreedyStr`。
+
+搜索链路：`_handle_search()` → `_collect_candidates()`（超采 + 翻页补拉）→ 去重 `_pick_illusts()` → `download_for_send()` → 发送。`_collect_candidates()` 首轮按 `wanted * CANDIDATE_OVERFETCH_FACTOR`（上限 20，Lolicon 硬上限）取候选，每轮都过漫画过滤、黑名单与方向筛选，按 `id` 去重累加，不足则换 `offset` 再拉，最多 `MAX_REFILL_ROUNDS`（3）轮；仍不足时在发送末尾明确回复「请求 N 张，实际发送 M 张」。方向参数同时以 `aspectRatio` 数值区间下发给 Lolicon，并在本地用 `pixiv/orientation.py` 复核。
+
+按作品 ID 发图走 `_fetch_illust_by_id()` → `PixivClient.illust_detail()`，`source_key` 固定为 `pixiv:detail`、`dedupe_days=0`，即不参与去重池——用户点名要的图不该被去重拦下；内容安全与黑名单仍然生效。
+
+文案由 `pixiv/caption.py` 的 `build_caption()` 统一生成，按 `caption_mode` 输出 `full`/`compact`/`off` 三档，并标注图源「P站（Pixiv）」或「L站（Lolicon）」、作品 ID 与 Pixiv 链接。
+
+收藏由 `pixiv/favorites.py` 的 `FavoriteStore` 管理，独立库文件 `pixiv_favorites.sqlite3`，刻意与去重库分开：去重记录按天清理，收藏必须长期有效。按 `(user_id, illust_id)` 主键去重，`add` 幂等。`_last_sent_illust`（按用户记住最近一次成功发送的作品）让 `/p 收藏`、`/p 取消收藏` 可以省略 ID。
+
+## 自然语言触发
+
+`main.py` 的 `@filter.regex(AUTO_TRIGGER_PATTERN)` 只做入口闸门，正则本身刻意放宽：只要句子「提到图/插画/壁纸/作品 ID」且「带请求意味」、长度不超过 60，就放进来由解析器判定。写窄了会把「能不能帮我找点蓝色系的图」挡在门外，模型兜底就永远没有机会。注意 `@filter.regex` 是 fullmatch 语义，所以整体 `^...$` 锚定、用前瞻表达三个条件。
+
+判定顺序在 `pixiv/natural_flow.py` 的 `NaturalTriggerMixin._handle_auto_trigger()`：
+
+1. 总开关、长度、`/` 前缀、空消息直接返回；
+2. `pixiv/natural.py` 的 `parse_natural_query()` 做规则解析：定位「来/整/搞/弄/发/给 + 数量 + 量词」触发骨架，骨架前是称呼或标签，骨架后是标签与方向；
+3. 规则未命中时，描述已发生的事（`looks_like_past_tense`）或提问（`looks_like_question`）直接返回，不烧 token；
+4. 仍不命中且 `auto_trigger_ai_fallback` 开启时，才调 `pixiv/natural_ai.py` 的 `NaturalQueryResolver`（`context.llm_generate`，只抽 `is_request/tag/count/orientation/illust_id`，超时或坏 JSON 一律退化为「不匹配」）；
+5. 全部未命中就静默放过，**不** `stop_event()`，消息继续走别的插件；模型判定「不是在要图」的句子进 `_ai_rejected_cache`（上限 512，满了清空），避免重复调用。
+
+命中后才 `stop_event()` 并复用 `_handle_search()`，与 `/p` 共用超采、去重、方向、扣费、文案全链路。称呼表由 `resolve_aliases()` 合并 `checkin_bot_name` 与 `auto_trigger_aliases`；句首命中称呼就剔除，没命中当标签，所以「初音来张图」仍然搜初音。
+
+方向词表刻意分两套：`pixiv/query.py` 的 `_ORIENTATION_TOKENS` 只收明确写法（`/p` 与自然语言共用），`pixiv/orientation.py` 的 `_ORIENTATION_ALIASES` 收全量别名（含「壁纸」「长图」「宽图」）。后者是常见 Pixiv 标签，若在指令里当方向词摘掉会让用户搜不到图。
+
+`pixiv/orientation.py` 的 `_ORIENTATION_BOUNDS` 用「大于 1 是横、小于 1 是竖」的宽口径（横 `1.05~4.00`、竖 `0.25~0.95`、方 `0.88~1.12`），而不是签到背景那种 3:4 ±20% 窄带：用户说「竖图」指的是竖着的图，9:16 手机壁纸、2:3 插画都算，用 0.60~0.90 去卡会筛掉一半竖图。签到背景的严格 3:4 口径（`checkin/background.py`）不受影响。
+
 ## 前端页面
 
 `pages/pluginCenter/` 使用原生 HTML、CSS 和 ES module，集中提供群排行、成员当前数值编辑、内容安全、会话策略和签到数据管理。会话策略由配置文件持久化；签到业务数据仍由 SQLite 和签到备份管理。成员编辑只更新 `checkin_users`，不回写 `checkin_records` 或 `checkin_group_presence`。
+
+黑名单缩略图由 `image-blacklist/thumb-data-batch` 批量取回，前端按 `BLACKLIST_THUMB_BATCH_SIZE`（32）分片并发请求后合并 `thumbs`；后端只做去重、不截断 ID 列表，单个分片失败不影响其余批次。
+
+## 签到排行查询
+
+`checkin/ranking_store.py` 把今日 / 月榜 / 连签 / 累计四类排行的聚合全部放在 SQL 中，Python 侧只接收「每个用户一行」的结果。月榜与累计用 `COUNT(DISTINCT date_key)` 按 `[start, end)` 半开区间统计；连签用 `CAST(julianday(date_key) AS INTEGER) - ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY date_key)` 识别连续日期段，再筛出结束日在「今天或昨天」的段。昵称取该用户 `last_seen_at` 最新的一行（`ROW_NUMBER() ... WHERE row_no = 1`）。
+
+这样避免把整群历史 `checkin_group_presence` 行（每人每天一行，只增不删）读进内存再聚合。`entries` 只返回 `limit` 条，`all_entries` 保留全部；`plugin_api` 层在响应前会移除 `all_entries`。
+
+管理中心概览只统计黑名单条数时走 `ImageIndexStore.count_blacklist_illusts()`（`SELECT COUNT(*)`），不调用 `list_blacklist_illusts()`。
 
 ## 依赖方向
 

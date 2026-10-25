@@ -225,6 +225,11 @@ class ImageIndexStore:
         async with self._lock:
             return await asyncio.to_thread(self._list_blacklist_illusts_sync)
 
+    async def count_blacklist_illusts(self) -> int:
+        """只统计黑名单条数，供概览接口使用，避免把整张表读进内存。"""
+        async with self._lock:
+            return await asyncio.to_thread(self._count_blacklist_illusts_sync)
+
     async def is_blacklisted(self, illust_id: str) -> bool:
         illust_id = str(illust_id or "")
         if not illust_id:
@@ -558,6 +563,11 @@ class ImageIndexStore:
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def _count_blacklist_illusts_sync(self) -> int:
+        conn = self._get_conn()
+        row = conn.execute("SELECT COUNT(*) AS count FROM image_blacklist").fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def _list_safety_terms_sync(self) -> list[dict[str, str]]:
         rows = (

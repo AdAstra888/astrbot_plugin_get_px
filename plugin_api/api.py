@@ -185,16 +185,16 @@ class PluginWebApi:
         if self.plugin.checkin_store is None or self.plugin.image_index is None:
             return self._unavailable()
         try:
-            checkin, blacklist, custom_terms = await asyncio.gather(
+            checkin, blacklist_count, custom_terms = await asyncio.gather(
                 self.plugin.checkin_store.get_checkin_overview(),
-                self.plugin.image_index.list_blacklist_illusts(),
+                self.plugin.image_index.count_blacklist_illusts(),
                 self.plugin.image_index.list_safety_terms(),
             )
             return jsonify(
                 {
                     "success": True,
                     **checkin,
-                    "blacklist_count": len(blacklist),
+                    "blacklist_count": blacklist_count,
                     "builtin_term_count": len(BUILTIN_SAFETY_TERMS),
                     "custom_term_count": len(custom_terms),
                     "latest_backup_at": self._latest_backup_at(),
@@ -1002,8 +1002,6 @@ class PluginWebApi:
                 continue
             seen.add(normalized)
             result.append(normalized)
-            if len(result) >= 32:
-                break
         return result
 
     @staticmethod

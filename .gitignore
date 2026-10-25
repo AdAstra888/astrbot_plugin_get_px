@@ -26,3 +26,7 @@ templates/checkin_calendar/_dev/
 # 本地进度记录与规划文档
 Progress/
 docs/superpowers/
+
+# 本地临时校验脚本与工具临时目录
+.tmp_*/
+_tmp_*.py

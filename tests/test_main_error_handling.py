@@ -436,15 +436,15 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin._ensure_client_or_error = lambda _event: True
         received = []
 
-        async def handle_search(_event, *, tag, count_str):
-            received.append((tag, count_str))
+        async def handle_search(_event, *, tag, count_str, orientation="", illust_id=""):
+            received.append((tag, count_str, orientation, illust_id))
             yield "ok"
 
         plugin._handle_search = handle_search
         event = _FakeEvent()
 
         self.assertEqual(await _collect(plugin.cmd_p(event)), ["ok"])
-        self.assertEqual(received, [("", "")])
+        self.assertEqual(received, [("", "", "", "")])
         self.assertTrue(event.stopped)
 
     async def test_initialize_logs_v3_migration_guidance_for_old_database(self):
@@ -656,7 +656,7 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
         plugin.client = object()
         plugin._ensure_client_or_error = lambda _event: True
 
-        async def handle_search(_event, *, tag, count_str):
+        async def handle_search(_event, *, tag, count_str, orientation="", illust_id=""):
             self.assertEqual(tag, "初音ミク")
             self.assertEqual(count_str, "3")
             yield "ok"
@@ -667,6 +667,49 @@ class MainErrorHandlingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
         self.assertTrue(event.stopped)
+
+    async def test_auto_trigger_drops_bot_name_prefix(self):
+        """「大肥鱼来张图」：句首称呼要剔掉，不能当成标签。"""
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "auto_trigger_enabled": True,
+            "checkin_bot_name": "大肥鱼",
+            "auto_trigger_ai_fallback": False,
+        }
+        plugin._ensure_client_or_error = lambda _event: True
+        captured = {}
+
+        async def handle_search(_event, *, tag, count_str, orientation="", illust_id=""):
+            captured["tag"] = tag
+            captured["count"] = count_str
+            yield "ok"
+
+        plugin._handle_search = handle_search
+        event = _FakeEvent()
+        event.get_message_str = lambda: "大肥鱼来张图"
+
+        self.assertEqual(await _collect(plugin.auto_trigger(event)), ["ok"])
+        self.assertEqual(captured, {"tag": "", "count": "1"})
+        self.assertTrue(event.stopped)
+
+    async def test_auto_trigger_ignores_plain_chatter(self):
+        """不像发图请求的闲聊既不触发，也不 stop_event。"""
+        plugin = object.__new__(GetPxPlugin)
+        plugin.config = {
+            "auto_trigger_enabled": True,
+            "auto_trigger_ai_fallback": False,
+        }
+        plugin._ensure_client_or_error = lambda _event: True
+
+        async def handle_search(_event, **_kwargs):
+            yield "should-not-run"
+
+        plugin._handle_search = handle_search
+        event = _FakeEvent()
+        event.get_message_str = lambda: "今天天气不错"
+
+        self.assertEqual(await _collect(plugin.auto_trigger(event)), [])
+        self.assertFalse(event.stopped)
 
     def test_friendly_send_error_is_callable_through_plugin_instance(self):
         plugin = object.__new__(GetPxPlugin)

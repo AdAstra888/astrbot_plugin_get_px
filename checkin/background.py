@@ -1,4 +1,16 @@
+"""签到背景比例工具。
+
+比例判定、尺寸提取等纯计算逻辑已下沉到 ``pixiv/orientation.py``，
+发图方向筛选与签到背景共用同一套口径。本模块只保留签到背景专用的
+目标比例常量，并把旧名字重新导出，避免既有调用方改动。
+"""
+
 from __future__ import annotations
+
+from ..pixiv.orientation import (  # noqa: F401  (对外重新导出)
+    illust_aspect_ratio,
+    illust_dimensions,
+)
 
 
 CHECKIN_ARTWORK_TARGET_RATIO = 0.75
@@ -60,31 +72,6 @@ def aspect_ratio_matches(illust: dict, target_ratio: float, tolerance: float) ->
     return abs(actual_ratio - target_ratio) <= allowed_delta
 
 
-def illust_aspect_ratio(illust: dict) -> float:
-    width, height = illust_dimensions(illust)
-    if width <= 0 or height <= 0:
-        return 0.0
-    return width / height
-
-
-def illust_dimensions(illust: dict) -> tuple[int, int]:
-    width = _positive_int(illust.get("width"))
-    height = _positive_int(illust.get("height"))
-    if width > 0 and height > 0:
-        return width, height
-
-    meta_pages = illust.get("meta_pages") or []
-    if meta_pages:
-        first_page = meta_pages[0] or {}
-        image_urls = first_page.get("image_urls") or {}
-        width = _positive_int(first_page.get("width") or image_urls.get("width"))
-        height = _positive_int(first_page.get("height") or image_urls.get("height"))
-        if width > 0 and height > 0:
-            return width, height
-
-    return 0, 0
-
-
 def _ratio_from_numbers(width_text: str, height_text: str) -> float:
     try:
         width = float(width_text)
@@ -94,11 +81,3 @@ def _ratio_from_numbers(width_text: str, height_text: str) -> float:
     if width <= 0 or height <= 0:
         return 0.0
     return width / height
-
-
-def _positive_int(value: object) -> int:
-    try:
-        result = int(float(value))
-    except (TypeError, ValueError):
-        return 0
-    return result if result > 0 else 0

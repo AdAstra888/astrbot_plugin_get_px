@@ -87,6 +87,93 @@ async def test_group_rankings_and_trend_use_only_current_group() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ranking_aggregates_in_sql_with_month_and_streak_rules() -> None:
+    """月榜只统计目标月，连签只在今天或昨天有记录时延续。"""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = FrozenCheckinStore(tmp, date_key="2026-07-01")
+        # Alice：7/01-7/03 连续签到，7/05 断签后重新开始
+        for day in ("2026-07-01", "2026-07-02", "2026-07-03", "2026-07-05"):
+            store.date_key = day
+            await store.checkin(
+                user_id="10001", username="Alice", bot_name="neko", group_id="20001"
+            )
+        # Bob：只在 6 月签到，7 月无记录
+        store.date_key = "2026-06-30"
+        await store.checkin(
+            user_id="10002", username="Bob", bot_name="neko", group_id="20001"
+        )
+        store.date_key = "2026-07-05"
+
+        month = await store.get_group_ranking(
+            group_id="20001", ranking_type="month", month="2026-07", limit=10
+        )
+        june = await store.get_group_ranking(
+            group_id="20001", ranking_type="month", month="2026-06", limit=10
+        )
+        streak = await store.get_group_ranking(
+            group_id="20001", ranking_type="streak", limit=10
+        )
+        total = await store.get_group_ranking(
+            group_id="20001", ranking_type="total", limit=10
+        )
+
+        assert [(item["user_id"], item["value"]) for item in month["entries"]] == [
+            ("10001", 4)
+        ]
+        assert [(item["user_id"], item["value"]) for item in june["entries"]] == [
+            ("10002", 1)
+        ]
+        # 7/05 是今天，所以 Alice 的连签是 1 而不是 3
+        assert [(item["user_id"], item["value"]) for item in streak["entries"]] == [
+            ("10001", 1)
+        ]
+        assert {item["user_id"]: item["value"] for item in total["entries"]} == {
+            "10001": 4,
+            "10002": 1,
+        }
+
+
+@pytest.mark.asyncio
+async def test_streak_continues_from_yesterday_when_today_unsigned() -> None:
+    """今天还没签到时，连签应从昨天往前数，而不是直接归零。"""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = FrozenCheckinStore(tmp, date_key="2026-07-10")
+        for day in ("2026-07-10", "2026-07-11", "2026-07-12"):
+            store.date_key = day
+            await store.checkin(
+                user_id="10001", username="Alice", bot_name="neko", group_id="20001"
+            )
+        store.date_key = "2026-07-13"
+
+        streak = await store.get_group_ranking(
+            group_id="20001", ranking_type="streak", limit=10
+        )
+
+        assert [(item["user_id"], item["value"]) for item in streak["entries"]] == [
+            ("10001", 3)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_streak_is_empty_after_two_idle_days() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = FrozenCheckinStore(tmp, date_key="2026-07-10")
+        await store.checkin(
+            user_id="10001", username="Alice", bot_name="neko", group_id="20001"
+        )
+        store.date_key = "2026-07-13"
+
+        streak = await store.get_group_ranking(
+            group_id="20001", ranking_type="streak", limit=10
+        )
+
+        assert streak["entries"] == []
+        assert streak["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_snapshot_round_trip_preserves_group_presence() -> None:
     with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
         source = FrozenCheckinStore(src, date_key="2026-07-13")

@@ -223,6 +223,27 @@ class ImageIndexStoreTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 store.close()
 
+    async def test_count_blacklist_illusts_matches_list_length(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FrozenImageIndexStore(tmp, date_key="2026-05-26")
+            try:
+                self.assertEqual(await store.count_blacklist_illusts(), 0)
+                for illust_id in ("501", "502", "503"):
+                    await store.add_blacklist_illust(illust_id=illust_id)
+                store.date_key = "2026-05-27"
+                await store.add_blacklist_illust(illust_id="504")
+
+                records = await store.list_blacklist_illusts()
+
+                self.assertEqual(await store.count_blacklist_illusts(), 4)
+                self.assertEqual(await store.count_blacklist_illusts(), len(records))
+
+                await store.remove_blacklist_illust("502")
+
+                self.assertEqual(await store.count_blacklist_illusts(), 3)
+            finally:
+                store.close()
+
     # ── page-cursor tests ──────────────────────────────────────────
 
     async def test_page_offset_starts_at_zero(self):
